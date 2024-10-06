@@ -1,3 +1,5 @@
+from random import randint
+import wandb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -116,8 +118,12 @@ class TrainingModule(nn.Module):
         self.hyperprior_decoder = HyperpriorDecoder()
     
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        y_tilde = self.add_uniform_noise(self.encoder(x))
-        z_tilde = self.add_uniform_noise(self.hyperprior_encoder(y_tilde))
+        y: torch.Tensor = self.encoder(x)
+        #print("y", y.max(), y.median())
+        y_tilde = self.add_uniform_noise(y)
+        z = self.hyperprior_encoder(y)
+        #print("z", z.max(), z.median())
+        z_tilde = self.add_uniform_noise(z)
         hyperprior_mean, hyperprior_std_deviation = self.hyperprior_decoder(z_tilde)
         x_tilde = self.decoder(y_tilde)
         
@@ -157,52 +163,76 @@ class INaturalistDataset(datasets.INaturalist):
         image, target = super().__getitem__(index)
         return self.tensor_transform(self.random_crop(image)), target
 
-def train(model: TrainingModule, dataset: Dataset, optimizer: torch.optim.Optimizer, batch_size: int, device: torch.device, distortion_weight: float) -> None:
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    size = len(dataloader.dataset)
+def train(model: TrainingModule, dataset: Dataset, optimizer: torch.optim.Optimizer, batch_size: int, device: torch.device, distortion_weight: float, epochs: int, num_samples: int) -> None:
     model.to(device)
     model.train()
+    for epoch in range(epochs):
+        train_single_epoch(model, dataset, optimizer, batch_size, device, distortion_weight, epoch)
+    model.eval()
+    visual_loss_eval(model, dataset, num_samples, device)
+
+def train_single_epoch(model: TrainingModule, dataset: Dataset, optimizer: torch.optim.Optimizer, batch_size: int, device: torch.device, distortion_weight: float, epoch: int) -> None:
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    size = len(dataloader.dataset)
     for batch_idx, (x, _) in enumerate(dataloader):
         # overtrain on one batch for now to see if this even works
-        for epoch in range(1000):
-            x: torch.Tensor = x.to(device=device)
-            x_tilde, y_tilde, z_tilde, hyperprior_mean, hyperprior_std_deviation = model(x)
-            loss_distortion = distortion_weight * model.distortion(x, x_tilde)
-            loss_rate = model.rate(y_tilde, hyperprior_mean, hyperprior_std_deviation)
-            loss_side_info = model.side_info_rate(z_tilde)
-            loss = loss_distortion + loss_rate + loss_side_info
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-                        
-            if epoch % 10 == 0:
-                pass
-                #loss, current = loss.item(), (epoch + 1) * len(x)
-                #print(f"loss: {loss:>7f} (distortion: {loss_distortion:>7f}, rate: {loss_rate:>7f}, side information: {loss_side_info:>7f}) [{current:>5d}/{size:>5d}]")
-                print(f"loss: {loss:>7f} (distortion: {loss_distortion:>7f}, rate: {loss_rate:>7f}, side information: {loss_side_info:>7f}) [{epoch}]")
-        for i in range(batch_size):
-            x_test = x[i]
-            x_test_tilde, _, _, _, _ = model(x_test)
+        x: torch.Tensor = x.to(device=device)
+        x_tilde, y_tilde, z_tilde, hyperprior_mean, hyperprior_std_deviation = model(x)
+        loss_distortion = model.distortion(x, x_tilde)
+        loss_rate = model.rate(y_tilde, hyperprior_mean, hyperprior_std_deviation)
+        loss_side_info = model.side_info_rate(z_tilde)
+        loss = distortion_weight * loss_distortion + 100 * loss_rate + loss_side_info
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+                    
+        if batch_idx % 10 == 0:
+            loss, current = loss.item(), (batch_idx + 1) * len(x)
+            print(f"loss: {loss:>7f} (distortion: {loss_distortion:>7f}, rate: {loss_rate:>7f}, side information: {loss_side_info:>7f}) [{current:>5d}/{size:>5d}]")
+            wandb.log({"loss": loss, "distortion": loss_distortion, "rate": loss_rate, "side info": loss_side_info, "epoch": epoch, "batch": batch_idx})
 
-            image = ToPILImage()(x_test)
-            image_tilde = ToPILImage()(x_test_tilde)
-            
-            image.save(f"results/original{i}.jpg")
-            image_tilde.save(f"results/decompressed{i}.jpg")
-        break
+def visual_loss_eval(model: TrainingModule, dataset: Dataset, num_samples: int, device: torch.device):
+    table = wandb.Table(columns=["original", "decompressed"])
+    for _ in range(num_samples):
+        x, _ = dataset[randint(0, len(dataset) - 1)]
+        x = x.to(device)
+        y_test = model.encoder(x)
+        x_test_decompressed = model.decoder(y_test)
+        image = ToPILImage()(x)
+        image_tilde = ToPILImage()(x_test_decompressed)
+        table.add_data(wandb.Image(image), wandb.Image(image_tilde))
+    wandb.log({"visual_loss": table})
 
+def init_wandb(learning_rate: float, arch_name: str, dataset: str, epochs: int):
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project="compression",
 
+        # track hyperparameters and run metadata
+        config={
+        "learning_rate": learning_rate,
+        "architecture": arch_name,
+        "dataset": dataset,
+        "epochs": epochs,
+        }
+    )
 
 def main():
+    learning_rate = 1e-4
+    arch_name = "BALLE-Standard"
+    dataset = "INaturalist"
+    epochs = 50
+    init_wandb(learning_rate, arch_name, dataset, epochs)
+    
     batch_size = 32
     torch.autograd.set_detect_anomaly(True)
     data = INaturalistDataset()
     
     model = TrainingModule()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"using {device} device")
-    train(model, data, optimizer, batch_size, device, 1)    
+    train(model, data, optimizer, batch_size, device, 255**2, epochs, 15)
 
 if __name__ == "__main__":
     main()
