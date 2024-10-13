@@ -105,29 +105,29 @@ class TrainingModule(nn.Module):
         self.noise = Uniform(torch.tensor(-1/2), torch.tensor(1/2))
         self.mse_loss = nn.MSELoss()
 
-        self.hyperprior_mean = nn.Parameter(torch.empty((32, 384, 4, 4), requires_grad=True))
-        nn.init.xavier_uniform_(self.hyperprior_mean)
+        #self.hyperprior_mean = nn.Parameter(torch.empty((1, 384, 4, 4), requires_grad=True))
+        #nn.init.xavier_uniform_(self.hyperprior_mean)
 
-        self.hyperprior_std_deviation = nn.Parameter(torch.empty((32, 384, 4, 4), requires_grad=True))
-        nn.init.xavier_uniform_(self.hyperprior_std_deviation)
+        #self.hyperprior_std_deviation = nn.Parameter(torch.empty((1, 384, 4, 4), requires_grad=True))
+        #nn.init.xavier_uniform_(self.hyperprior_std_deviation)
 
         self.encoder = Encoder()
         self.decoder = Decoder()
         
-        self.hyperprior_encoder = HyperpriorEncoder()
-        self.hyperprior_decoder = HyperpriorDecoder()
+        #self.hyperprior_encoder = HyperpriorEncoder()
+        #self.hyperprior_decoder = HyperpriorDecoder()
     
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         y: torch.Tensor = self.encoder(x)
         #print("y", y.max(), y.median())
         y_tilde = self.add_uniform_noise(y)
-        z = self.hyperprior_encoder(y)
+        #z = self.hyperprior_encoder(y)
         #print("z", z.max(), z.median())
-        z_tilde = self.add_uniform_noise(z)
-        hyperprior_mean, hyperprior_std_deviation = self.hyperprior_decoder(z_tilde)
+        #z_tilde = self.add_uniform_noise(z)
+        #hyperprior_mean, hyperprior_std_deviation = self.hyperprior_decoder(z_tilde)
         x_tilde = self.decoder(y_tilde)
         
-        return x_tilde, y_tilde, z_tilde, hyperprior_mean, hyperprior_std_deviation
+        return x_tilde#, y_tilde, z_tilde, hyperprior_mean, hyperprior_std_deviation
     
     def add_uniform_noise(self, x: torch.Tensor) -> torch.Tensor:
         return x + self.noise.sample(x.size()).to(x.device)
@@ -149,19 +149,18 @@ class CompressionModule(nn.Module):
     def from_training_module(training_module: TrainingModule):
         pass
 
-class INaturalistDataset(datasets.INaturalist):
+class INaturalistDataset(datasets.Caltech101):
     def __init__(self):
-        super().__init__("data", version="2021_train_mini", download=False)
+        super().__init__("data", download=True)
         self.tensor_transform = ToTensor()
         self.random_crop = RandomCrop(256, pad_if_needed=True)
-    
-    def __len__(safe) -> int:
-        # this dataset is still pretty large, lets see if we can get away with using only 10th of it
-        return super().__len__()//10
-    
+        
     def __getitem__(self, index: int) -> torch.Tuple[torch.Tensor]:
         image, target = super().__getitem__(index)
-        return self.tensor_transform(self.random_crop(image)), target
+        tensor = self.tensor_transform(self.random_crop(image))
+        if tensor.shape[0] == 1:
+            tensor = tensor.repeat(3, 1, 1)
+        return tensor, target
 
 def train(model: TrainingModule, dataset: Dataset, optimizer: torch.optim.Optimizer, batch_size: int, device: torch.device, distortion_weight: float, epochs: int, num_samples: int) -> None:
     model.to(device)
@@ -177,19 +176,19 @@ def train_single_epoch(model: TrainingModule, dataset: Dataset, optimizer: torch
     for batch_idx, (x, _) in enumerate(dataloader):
         # overtrain on one batch for now to see if this even works
         x: torch.Tensor = x.to(device=device)
-        x_tilde, y_tilde, z_tilde, hyperprior_mean, hyperprior_std_deviation = model(x)
+        x_tilde = model(x)#, y_tilde, z_tilde, hyperprior_mean, hyperprior_std_deviation = model(x)
         loss_distortion = model.distortion(x, x_tilde)
-        loss_rate = model.rate(y_tilde, hyperprior_mean, hyperprior_std_deviation)
-        loss_side_info = model.side_info_rate(z_tilde)
-        loss = distortion_weight * loss_distortion + 100 * loss_rate + loss_side_info
+        loss_rate = 0#model.rate(y_tilde, hyperprior_mean, hyperprior_std_deviation)
+        loss_side_info = 0#model.side_info_rate(z_tilde)
+        loss = distortion_weight * loss_distortion# + 100 * loss_rate + loss_side_info
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
                     
         if batch_idx % 10 == 0:
             loss, current = loss.item(), (batch_idx + 1) * len(x)
-            print(f"loss: {loss:>7f} (distortion: {loss_distortion:>7f}, rate: {loss_rate:>7f}, side information: {loss_side_info:>7f}) [{current:>5d}/{size:>5d}]")
-            wandb.log({"loss": loss, "distortion": loss_distortion, "rate": loss_rate, "side info": loss_side_info, "epoch": epoch, "batch": batch_idx})
+            print(f"loss: {loss:>7f} (distortion: {loss_distortion:>7f}, rate: {loss_rate:>7f}, side information: {loss_side_info:>7f}) [{current:>5d}/{size:>5d}, epoch: {epoch}]")
+            wandb.log({"loss": loss, "distortion": loss_distortion, "rate": loss_rate, "side info": loss_side_info})
 
 def visual_loss_eval(model: TrainingModule, dataset: Dataset, num_samples: int, device: torch.device):
     table = wandb.Table(columns=["original", "decompressed"])
@@ -221,7 +220,7 @@ def main():
     learning_rate = 1e-4
     arch_name = "BALLE-Standard"
     dataset = "INaturalist"
-    epochs = 50
+    epochs = 10
     init_wandb(learning_rate, arch_name, dataset, epochs)
     
     batch_size = 32
@@ -232,7 +231,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"using {device} device")
-    train(model, data, optimizer, batch_size, device, 255**2, epochs, 15)
+    train(model, data, optimizer, batch_size, device, 255**3, epochs, 15)
 
 if __name__ == "__main__":
     main()
