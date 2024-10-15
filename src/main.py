@@ -173,11 +173,13 @@ def train(model: TrainingModule, dataset: Dataset, optimizer: torch.optim.Optimi
 def train_single_epoch(model: TrainingModule, dataset: Dataset, optimizer: torch.optim.Optimizer, batch_size: int, device: torch.device, distortion_weight: float, epoch: int) -> None:
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     size = len(dataloader.dataset)
+    loss_distortion_list = []
     for batch_idx, (x, _) in enumerate(dataloader):
         # overtrain on one batch for now to see if this even works
         x: torch.Tensor = x.to(device=device)
         x_tilde = model(x)#, y_tilde, z_tilde, hyperprior_mean, hyperprior_std_deviation = model(x)
         loss_distortion = model.distortion(x, x_tilde)
+        loss_distortion_list.append(loss_distortion)
         loss_rate = 0#model.rate(y_tilde, hyperprior_mean, hyperprior_std_deviation)
         loss_side_info = 0#model.side_info_rate(z_tilde)
         loss = distortion_weight * loss_distortion# + 100 * loss_rate + loss_side_info
@@ -189,6 +191,7 @@ def train_single_epoch(model: TrainingModule, dataset: Dataset, optimizer: torch
             loss, current = loss.item(), (batch_idx + 1) * len(x)
             print(f"loss: {loss:>7f} (distortion: {loss_distortion:>7f}, rate: {loss_rate:>7f}, side information: {loss_side_info:>7f}) [{current:>5d}/{size:>5d}, epoch: {epoch}]")
             wandb.log({"loss": loss, "distortion": loss_distortion, "rate": loss_rate, "side info": loss_side_info})
+    wandb.log({"avg_distortion_over_epoch": sum(loss_distortion_list)/len(loss_distortion_list)})
 
 def visual_loss_eval(model: TrainingModule, dataset: Dataset, num_samples: int, device: torch.device):
     table = wandb.Table(columns=["original", "decompressed"])
@@ -217,10 +220,10 @@ def init_wandb(learning_rate: float, arch_name: str, dataset: str, epochs: int):
     )
 
 def main():
-    learning_rate = 1e-4
+    learning_rate = 1e-3
     arch_name = "BALLE-Standard"
     dataset = "INaturalist"
-    epochs = 10
+    epochs = 500
     init_wandb(learning_rate, arch_name, dataset, epochs)
     
     batch_size = 32
@@ -231,7 +234,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"using {device} device")
-    train(model, data, optimizer, batch_size, device, 255**3, epochs, 15)
+    train(model, data, optimizer, batch_size, device, 255**2, epochs, 15)
 
 if __name__ == "__main__":
     main()
