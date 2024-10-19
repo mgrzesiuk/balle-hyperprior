@@ -25,8 +25,8 @@ class Encoder(nn.Module):
         super().__init__()
         self.hidden_layers = nn.ModuleList()
         self.hidden_layers.append(Conv2dWithSampling(in_channels=3, out_channels=128*3, kernel_size=5, padding='same', scale_factor=0.5, mode="nearest"))
-        self.hidden_layers.append(Conv2dWithSampling(in_channels=128*3, out_channels=128*3, kernel_size=5, padding='same', scale_factor=0.5, mode="nearest"))
-        self.hidden_layers.append(Conv2dWithSampling(in_channels=128*3, out_channels=128*3, kernel_size=5, padding='same', scale_factor=0.5, mode="nearest"))
+        #self.hidden_layers.append(Conv2dWithSampling(in_channels=128*3, out_channels=128*3, kernel_size=5, padding='same', scale_factor=0.5, mode="nearest"))
+        #self.hidden_layers.append(Conv2dWithSampling(in_channels=128*3, out_channels=128*3, kernel_size=5, padding='same', scale_factor=0.5, mode="nearest"))
         self.final_layer = Conv2dWithSampling(in_channels=128*3, out_channels=192*3, kernel_size=5, padding='same', scale_factor=0.5, mode="nearest")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -39,8 +39,8 @@ class Decoder(nn.Module):
         super().__init__()
         self.hidden_layers = nn.ModuleList()
         self.hidden_layers.append(Conv2dWithSampling(in_channels=192*3, out_channels=128*3, kernel_size=5, padding='same', scale_factor=2, mode="nearest"))
-        self.hidden_layers.append(Conv2dWithSampling(in_channels=128*3, out_channels=128*3, kernel_size=5, padding='same', scale_factor=2, mode="nearest"))
-        self.hidden_layers.append(Conv2dWithSampling(in_channels=128*3, out_channels=128*3, kernel_size=5, padding='same', scale_factor=2, mode="nearest"))
+        #self.hidden_layers.append(Conv2dWithSampling(in_channels=128*3, out_channels=128*3, kernel_size=5, padding='same', scale_factor=2, mode="nearest"))
+        #self.hidden_layers.append(Conv2dWithSampling(in_channels=128*3, out_channels=128*3, kernel_size=5, padding='same', scale_factor=2, mode="nearest"))
         self.final_layer = Conv2dWithSampling(in_channels=128*3, out_channels=3, kernel_size=5, padding='same', scale_factor=2, mode="nearest")
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -223,7 +223,7 @@ def main():
     learning_rate = 1e-3
     arch_name = "BALLE-Standard"
     dataset = "INaturalist"
-    epochs = 500
+    epochs = 10
     init_wandb(learning_rate, arch_name, dataset, epochs)
     
     batch_size = 32
@@ -234,7 +234,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"using {device} device")
-    train(model, data, optimizer, batch_size, device, 255**2, epochs, 15)
+    train(model, data, optimizer, batch_size, device, 1, epochs, 15)
 
 if __name__ == "__main__":
     main()
