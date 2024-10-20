@@ -105,29 +105,29 @@ class TrainingModule(nn.Module):
         self.noise = Uniform(torch.tensor(-1/2), torch.tensor(1/2))
         self.mse_loss = nn.MSELoss()
 
-        #self.hyperprior_mean = nn.Parameter(torch.empty((1, 384, 4, 4), requires_grad=True))
-        #nn.init.xavier_uniform_(self.hyperprior_mean)
+        self.hyperprior_mean = nn.Parameter(torch.empty((1, 384, 64, 64), requires_grad=True))
+        nn.init.xavier_uniform_(self.hyperprior_mean)
 
-        #self.hyperprior_std_deviation = nn.Parameter(torch.empty((1, 384, 4, 4), requires_grad=True))
-        #nn.init.xavier_uniform_(self.hyperprior_std_deviation)
+        self.hyperprior_std_deviation = nn.Parameter(torch.empty((1, 384, 64, 64), requires_grad=True))
+        nn.init.xavier_uniform_(self.hyperprior_std_deviation)
 
         self.encoder = Encoder()
         self.decoder = Decoder()
         
-        #self.hyperprior_encoder = HyperpriorEncoder()
-        #self.hyperprior_decoder = HyperpriorDecoder()
+        self.hyperprior_encoder = HyperpriorEncoder()
+        self.hyperprior_decoder = HyperpriorDecoder()
     
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         y: torch.Tensor = self.encoder(x)
         #print("y", y.max(), y.median())
         y_tilde = self.add_uniform_noise(y)
-        #z = self.hyperprior_encoder(y)
+        z = self.hyperprior_encoder(y)
         #print("z", z.max(), z.median())
-        #z_tilde = self.add_uniform_noise(z)
-        #hyperprior_mean, hyperprior_std_deviation = self.hyperprior_decoder(z_tilde)
+        z_tilde = self.add_uniform_noise(z)
+        hyperprior_mean, hyperprior_std_deviation = self.hyperprior_decoder(z_tilde)
         x_tilde = self.decoder(y_tilde)
         
-        return x_tilde#, y_tilde, z_tilde, hyperprior_mean, hyperprior_std_deviation
+        return x_tilde, y_tilde, z_tilde, hyperprior_mean, hyperprior_std_deviation
     
     def add_uniform_noise(self, x: torch.Tensor) -> torch.Tensor:
         return x + self.noise.sample(x.size()).to(x.device)
@@ -135,7 +135,7 @@ class TrainingModule(nn.Module):
     def side_info_rate(self, z_tilde) -> torch.Tensor:
         # I bet simple normal works just as well as that non parametric distribution defined in the paper
         # to power of 2 since need to guarantee this is positive
-        normal = Normal(self.hyperprior_mean, self.hyperprior_std_deviation.pow(2))
+        normal = Normal(self.hyperprior_mean, self.hyperprior_std_deviation.pow(2)+ + 1e-10)
         return -torch.log((normal.cdf(z_tilde + 1/2) - normal.cdf(z_tilde - 1/2)).mean())
     
     def rate(self, y_tilde: torch.Tensor, mean: torch.Tensor,  std_deviation: torch.Tensor) -> torch.Tensor:
@@ -177,12 +177,12 @@ def train_single_epoch(model: TrainingModule, dataset: Dataset, optimizer: torch
     for batch_idx, (x, _) in enumerate(dataloader):
         # overtrain on one batch for now to see if this even works
         x: torch.Tensor = x.to(device=device)
-        x_tilde = model(x)#, y_tilde, z_tilde, hyperprior_mean, hyperprior_std_deviation = model(x)
+        x_tilde, y_tilde, z_tilde, hyperprior_mean, hyperprior_std_deviation = model(x)
         loss_distortion = model.distortion(x, x_tilde)
         loss_distortion_list.append(loss_distortion)
-        loss_rate = 0#model.rate(y_tilde, hyperprior_mean, hyperprior_std_deviation)
-        loss_side_info = 0#model.side_info_rate(z_tilde)
-        loss = distortion_weight * loss_distortion# + 100 * loss_rate + loss_side_info
+        loss_rate = model.rate(y_tilde, hyperprior_mean, hyperprior_std_deviation)
+        loss_side_info = model.side_info_rate(z_tilde)
+        loss = distortion_weight * loss_distortion + loss_rate + loss_side_info
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
@@ -234,7 +234,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"using {device} device")
-    train(model, data, optimizer, batch_size, device, 1, epochs, 15)
+    train(model, data, optimizer, batch_size, device, 255**2, epochs, 15)
 
 if __name__ == "__main__":
     main()
